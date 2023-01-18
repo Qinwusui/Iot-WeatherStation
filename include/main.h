@@ -49,4 +49,8 @@ void onScanComplete(AsyncWebServerRequest *req, int n);
 void writeLoc(String lon, String lat);
 void onSoftAPModeStationConnected(WiFiEventSoftAPModeStationConnected s);
 void onWiFiEventStationModeConnected(WiFiEventStationModeConnected s);
+void displayWifiIntensity();
+scu *rssiToString(int8_t rssi);
+void showWifiIcon(const uint8_t *img);
+void wifiConnecting();
     // int ungzip(char *source, int len, char *des);

@@ -29,12 +29,15 @@ Task tTimeUpdateTask(&ttimeUpdate, &sc);
 // 定义一个时间初始化任务
 Task tTimeInitTask(&initTimeClient, &sc);
 // 定义一个天气展示任务
-Task tWeatherDisplayTask(TASK_IMMEDIATE,TASK_FOREVER,&displayWeather, &sc);
+Task tWeatherDisplayTask(TASK_IMMEDIATE, TASK_FOREVER, &displayWeather, &sc);
 // 定义一个WiFi连接任务
 Task tWifiConnectTask(&initWifi, &sc);
 // 定义一个文件系统初始化任务
 Task tInitLittleFsTask(&initLitteFs, &sc);
-
+// 定义一个WiFi强度展示任务
+Task tShowWifiSignalIntensityTask(TASK_SECOND, TASK_FOREVER, &displayWifiIntensity, &sc);
+// 定义一个WiFi连接中动画任务
+Task tWifiConnectingAnimationTask(TASK_SECOND, TASK_FOREVER, &wifiConnecting, &sc);
 // 屏幕驱动
 TFT_eSPI tft = TFT_eSPI();
 
@@ -51,6 +54,7 @@ void setup()
     Serial.begin(115200);
     dht.begin();
     initTFT();
+
     initServer();
 
     Serial.println("执行多任务");
@@ -59,6 +63,7 @@ void setup()
 
     // 初始化Wifi连接
     tWifiConnectTask.waitFor(tInitLittleFsTask.getInternalStatusRequest(), TASK_SECOND, -1);
+    tShowWifiSignalIntensityTask.waitFor(tWifiConnectTask.getInternalStatusRequest(), TASK_SECOND, -1);
     tWeatherUpdateTask.waitForDelayed(tWifiConnectTask.getInternalStatusRequest(), TASK_IMMEDIATE, -1);
     // 初始化时间更新
     tTimeInitTask.waitFor(tWifiConnectTask.getInternalStatusRequest(), TASK_IMMEDIATE, TASK_FOREVER);
@@ -93,9 +98,10 @@ void initTFT()
     tft.begin();
     tft.setRotation(1);
     tft.fillScreen(TFT_BLACK);
-    tft.fillRect(0, 220, tft.width(), 20, tft.color565(67, 77, 125));
-    tft.setTextColor(tft.color565(240, 238, 239), tft.color565(67, 77, 125));
-    tft.drawXBitmap(0, 0, Logo, 32, 32, TFT_WHITE);
+    tft.fillRect(0, 220, tft.width(), 20, tft.color565(245, 189, 188));
+    tft.fillRect(0, 0, tft.width(), 20, tft.color565(245, 189, 188));
+
+    tft.setTextColor(tft.color565(32, 32, 32), tft.color565(245, 189, 188));
     tft_Print_Bottom("Welcome!");
     delay(2000);
 }
@@ -104,7 +110,7 @@ void tft_Print_Bottom_Right(String s)
 {
     int text_width = tft.textWidth(s);
     int x = tft.width() - text_width;
-    tft.fillRect(0, 220, tft.width(), 20, tft.color565(67, 77, 125));
+    tft.fillRect(0, 220, tft.width(), 20, tft.color565(245, 189, 188));
 
     tft.setCursor(x, 224);
     tft.println(s);
@@ -113,7 +119,7 @@ void tft_Print_Bottom_Left(String s)
 {
     tft.setTextSize(2);
     tft.setCursor(0, 224);
-    tft.fillRect(0, 220, tft.width(), 20, tft.color565(67, 77, 125));
+    tft.fillRect(0, 220, tft.width(), 20, tft.color565(245, 189, 188));
     tft.println(s);
     tft.setTextSize(1);
 }
@@ -121,13 +127,13 @@ void tft_Print_Bottom(String s)
 {
     int text_width = tft.textWidth(s);
     int x = (tft.width() - text_width) / 2;
-    tft.fillRect(0, 220, tft.width(), 20, tft.color565(67, 77, 125));
+    tft.fillRect(0, 220, tft.width(), 20, tft.color565(245, 189, 188));
     tft.setCursor(x, 227);
     tft.println(s);
 }
 void tft_Clear_Bottom()
 {
-    tft.fillRect(0, 220, tft.width(), 20, tft.color565(67, 77, 125));
+    tft.fillRect(0, 220, tft.width(), 20, tft.color565(245, 189, 188));
 }
 
 void initLitteFs()
@@ -328,8 +334,9 @@ void initWifi()
     WiFi.disconnect();
 
     WiFi.begin(ssid, pwd);
-    
-    
+    tWifiConnectingAnimationTask.setIterations(-1);
+    tWifiConnectingAnimationTask.setInterval(1000);
+    tWifiConnectingAnimationTask.enable();
     yield();
     Serial.println("尝试连接WiFi");
     tWifiConnectTask.yield(&connectionCheck);
@@ -353,9 +360,14 @@ void connectionCheck()
 {
     if (WiFi.status() == WL_CONNECTED)
     {
+
         Serial.println("连接成功");
         tft_Print_Bottom(WiFi.SSID() + " Connected! IP:" + WiFi.localIP().toString());
         tWifiConnectTask.delay(1000);
+        // TODO 增加开启WiFi强度显示，展示在顶部栏
+        tShowWifiSignalIntensityTask.disable();
+        tWifiConnectingAnimationTask.disable();
+        tShowWifiSignalIntensityTask.enable();
         tft_Clear_Bottom();
         tWifiConnectTask.getStatusRequest()->signalComplete();
         tWifiConnectTask.disable();
@@ -363,7 +375,7 @@ void connectionCheck()
     else // 没有连接成功，重试
     {
 
-        if (tWifiConnectTask.getRunCounter() % 3 == 0) // 每5秒重试一次
+        if (tWifiConnectTask.getRunCounter() % 3 == 0) // 每3秒重试一次
         {
             Serial.println("重试中..");
             WiFi.begin(readSSID(), readPwd());
@@ -480,4 +492,61 @@ void writeLoc(String lon, String lat)
     File f = LittleFS.open(locFile, "w+");
     f.print(lon + "," + lat);
     f.close();
+}
+
+void displayWifiIntensity()
+{
+    int rssi = WiFi.RSSI();
+    scu *wifi = rssiToString(rssi);
+    showWifiIcon(wifi);
+    tShowWifiSignalIntensityTask.getInternalStatusRequest()->signalComplete();
+}
+
+scu *rssiToString(int8_t rssi)
+{
+
+    if (rssi >= -80 && rssi <= -70)
+    {
+        return WiFi_Low;
+    }
+    if (rssi > -70 && rssi <= -60)
+    {
+        return WiFi_Medium;
+    }
+    if (rssi > -60 && rssi <= -50)
+    {
+        return WiFi_Good;
+    }
+    if (rssi > -50)
+    {
+        return WiFi_Perfect;
+    }
+    return WiFi_Low;
+}
+void showWifiIcon(const uint8_t *img)
+{
+    tft.drawXBitmap(tft.width() - 18, 2, img, 16, 16, TFT_BLACK);
+}
+
+void wifiConnecting()
+{
+    tft.fillRect(tft.width() - 18, 2, 16, 16, tft.color565(245, 189, 188));
+    if (tWifiConnectingAnimationTask.getRunCounter() % 4 == 1)
+    {
+        tft.drawXBitmap(tft.width() - 18, 2, WiFi_Low, 16, 16, TFT_BLACK);
+    }
+    if (tWifiConnectingAnimationTask.getRunCounter() % 4 == 2)
+    {
+        tft.drawXBitmap(tft.width() - 18, 2, WiFi_Medium, 16, 16, TFT_BLACK);
+    }
+
+    if (tWifiConnectingAnimationTask.getRunCounter() % 4 == 3)
+    {
+        tft.drawXBitmap(tft.width() - 18, 2, WiFi_Good, 16, 16, TFT_BLACK);
+    }
+
+    if (tWifiConnectingAnimationTask.getRunCounter() % 4 == 0)
+    {
+        tft.drawXBitmap(tft.width() - 18, 2, WiFi_Perfect, 16, 16, TFT_BLACK);
+    }
 }
