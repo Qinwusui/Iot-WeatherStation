@@ -9,8 +9,8 @@
  *
  */
 #include <main.h>
-// 初始化WiFi配网
-ESP8266WiFiMulti WiFiMulti;
+// WebSocket客户端
+WebSocketsClient wsClient;
 // 初始化温度传感器
 DHT dht(15, DHT11);
 // 初始化服务器
@@ -31,13 +31,25 @@ Task tTimeInitTask(&initTimeClient, &sc);
 // 定义一个天气展示任务
 Task tWeatherDisplayTask(TASK_IMMEDIATE, TASK_FOREVER, &displayWeather, &sc);
 // 定义一个WiFi连接任务
-Task tWifiConnectTask(&initWifi, &sc);
+Task tWifiConnectTask(TASK_SECOND, TASK_FOREVER, &initWifi, &sc);
 // 定义一个文件系统初始化任务
 Task tInitLittleFsTask(&initLitteFs, &sc);
-// 定义一个WiFi强度展示任务
-Task tShowWifiSignalIntensityTask(TASK_SECOND, TASK_FOREVER, &displayWifiIntensity, &sc);
+
 // 定义一个WiFi连接中动画任务
 Task tWifiConnectingAnimationTask(TASK_SECOND, TASK_FOREVER, &wifiConnecting, &sc);
+// 定义一个展示ssid的任务
+Task tShowWifiInfoToTopTask(TASK_IMMEDIATE, TASK_FOREVER, &showWifiInfoToTop, &sc, true);
+// 定义一个初始化Websocket客户端任务
+Task tInitWsClientTask(TASK_IMMEDIATE, TASK_ONCE, &initWsClient, &sc);
+// 定义一个WebSocket轮询任务
+Task tWsClientPollTask(TASK_IMMEDIATE, TASK_FOREVER, &wsPoll, &sc);
+// 定义一个展示LogoGIF的任务
+Task tShowLogoTask(TASK_IMMEDIATE, TASK_FOREVER, &time2Logo, &sc);
+
+// 定义一个计时任务
+Task tTickerTask(TASK_SECOND, TASK_FOREVER, &timeUp, &sc);
+int timeStamp = 0;
+
 // 屏幕驱动
 TFT_eSPI tft = TFT_eSPI();
 
@@ -48,6 +60,7 @@ String IP_Key = "839945f06ffc5e";
 weather wa;
 String wifiFile = "/wifi/wifiConfig.ini";
 String locFile = "/loc/location.ini";
+uint16_t bgColor = tft.color565(245, 189, 188);
 
 void setup()
 {
@@ -60,10 +73,12 @@ void setup()
     Serial.println("执行多任务");
     // 初始化存储
     tInitLittleFsTask.enable();
-
+    tTickerTask.enable();
+    tShowLogoTask.enable();
     // 初始化Wifi连接
     tWifiConnectTask.waitFor(tInitLittleFsTask.getInternalStatusRequest(), TASK_SECOND, -1);
-    tShowWifiSignalIntensityTask.waitFor(tWifiConnectTask.getInternalStatusRequest(), TASK_SECOND, -1);
+    tInitWsClientTask.waitFor(tWifiConnectTask.getInternalStatusRequest(), TASK_IMMEDIATE, TASK_ONCE);
+    tWsClientPollTask.waitFor(tInitWsClientTask.getInternalStatusRequest(), TASK_IMMEDIATE, TASK_FOREVER);
     tWeatherUpdateTask.waitForDelayed(tWifiConnectTask.getInternalStatusRequest(), TASK_IMMEDIATE, -1);
     // 初始化时间更新
     tTimeInitTask.waitFor(tWifiConnectTask.getInternalStatusRequest(), TASK_IMMEDIATE, TASK_FOREVER);
@@ -73,16 +88,61 @@ void loop()
 {
     sc.execute();
 }
+void initWsClient()
+{
+    Serial.println("初始化Websocket客户端");
+    wsClient.begin("192.168.123.100", 8080, "/");
+    if (wsClient.isConnected())
+    {
+        Serial.println("已连接Ws服务器");
+    }
+    wsClient.onEvent(wsClientEvent);
+    tInitWsClientTask.getInternalStatusRequest()->signalComplete();
+}
+void wsPoll()
+{
+    wsClient.loop();
+}
+void wsClientEvent(WStype_t type, uint8_t *payload, size_t length)
+{
+    String text = String((char *)payload);
+
+    switch (type)
+    {
+    case WStype_TEXT:
+    {
+        DynamicJsonDocument json(length * 2);
+        deserializeJson(json, text);
+        String postType = json["post_type"].as<String>();
+        if (postType == "message")
+        {
+            String messageType = json["message_type"].as<String>();
+            if (messageType == "group")
+            {
+                // 群聊消息
+                int64_t groupId = json["group_id"].as<int64_t>();
+                int64_t senderId = json["sender"]["user_id"].as<int64_t>();
+                String msg = json["message"].as<String>();
+                String rawMsg = json["raw_message"].as<String>();
+                groupMsgHandler(&wsClient, groupId, senderId, msg, rawMsg);
+            }
+            if (messageType == "private")
+            {
+                // 私聊消息
+            }
+        }
+    }
+
+    break;
+
+    default:
+        break;
+    }
+}
+
 // 初始化网络时间函数
 void initTimeClient()
 {
-    if (!WiFi.isConnected())
-    {
-        Serial.println("WiFi未连接");
-        tTimeInitTask.getInternalStatusRequest()->signal(-1);
-        tTimeInitTask.restartDelayed(5000);
-    }
-
     Serial.println("初始化时间");
     timeClient.begin();
 
@@ -97,20 +157,44 @@ void initTFT()
 {
     tft.begin();
     tft.setRotation(1);
-    tft.fillScreen(TFT_BLACK);
-    tft.fillRect(0, 220, tft.width(), 20, tft.color565(245, 189, 188));
-    tft.fillRect(0, 0, tft.width(), 20, tft.color565(245, 189, 188));
 
-    tft.setTextColor(tft.color565(32, 32, 32), tft.color565(245, 189, 188));
+    tft.fillScreen(TFT_BLACK);
+
+    tft.fillRect(0, 220, tft.width(), 20, bgColor);
+    tft.fillRect(0, 0, tft.width(), 20, bgColor);
+
+    tft.setTextColor(tft.color565(32, 32, 32), bgColor);
+
     tft_Print_Bottom("Welcome!");
     delay(2000);
+}
+void timeUp()
+{
+    if (timeStamp == 100000)
+    {
+        timeStamp = 0;
+    }
+
+    timeStamp++;
+}
+void time2Logo()
+{
+    tft.fillRect(0, 0, 24, 20, bgColor);
+    if (timeStamp % 2 == 0)
+    {
+        tft.drawXBitmap(0, 0, Logo1, 24, 24, TFT_BLACK);
+    }
+    else
+    {
+        tft.drawXBitmap(0, 0, Logo2, 24, 24, TFT_BLACK);
+    }
 }
 // 在屏幕右下角输出
 void tft_Print_Bottom_Right(String s)
 {
     int text_width = tft.textWidth(s);
     int x = tft.width() - text_width;
-    tft.fillRect(0, 220, tft.width(), 20, tft.color565(245, 189, 188));
+    tft.fillRect(0, 220, tft.width(), 20, bgColor);
 
     tft.setCursor(x, 224);
     tft.println(s);
@@ -119,7 +203,7 @@ void tft_Print_Bottom_Left(String s)
 {
     tft.setTextSize(2);
     tft.setCursor(0, 224);
-    tft.fillRect(0, 220, tft.width(), 20, tft.color565(245, 189, 188));
+    tft.fillRect(0, 220, tft.width(), 20, bgColor);
     tft.println(s);
     tft.setTextSize(1);
 }
@@ -127,13 +211,16 @@ void tft_Print_Bottom(String s)
 {
     int text_width = tft.textWidth(s);
     int x = (tft.width() - text_width) / 2;
-    tft.fillRect(0, 220, tft.width(), 20, tft.color565(245, 189, 188));
+    tft.fillRect(0, 220, tft.width(), 20, bgColor);
     tft.setCursor(x, 227);
     tft.println(s);
 }
+void tft_Clear_Top()
+{
+}
 void tft_Clear_Bottom()
 {
-    tft.fillRect(0, 220, tft.width(), 20, tft.color565(245, 189, 188));
+    tft.fillRect(0, 220, tft.width(), 20, bgColor);
 }
 
 void initLitteFs()
@@ -211,18 +298,18 @@ void initServer()
         return;
     }
     server.on("/", HTTP_GET, handleRoot);
-    server.on("/config/wifi", HTTP_GET, handleConfigWifi);
-    server.on("/config/wifi/list", HTTP_GET, handleWifiList);
-    server.on("/config/location", HTTP_GET, handleSetLocation);
+    server.on("/wifi", HTTP_GET, handleConfigWifi);
+    server.on("/list", HTTP_GET, handleWifiList);
+    server.on("/location", HTTP_GET, handleSetLocation);
 
     server.begin();
 }
 void handleWifiList(AsyncWebServerRequest *req)
 {
-    onComplete = std::bind(onScanComplete, req, std::placeholders::_1);
+    onCompleteBYWeb = std::bind(onScanComplete, req, std::placeholders::_1);
     Serial.println("开始扫描");
 
-    WiFi.scanNetworksAsync(onComplete);
+    WiFi.scanNetworksAsync(onCompleteBYWeb);
 }
 void onScanComplete(AsyncWebServerRequest *req, int n)
 {
@@ -262,7 +349,9 @@ void handleSetLocation(AsyncWebServerRequest *req)
         serializeJsonPretty(json, s);
         req->send(200, "application/json", s);
         tft_Print_Bottom("Set Successfully");
+
         tWeatherUpdateTask.disable();
+        tft_Clear_Bottom();
         tWeatherUpdateTask.setInterval(5000);
         tWeatherUpdateTask.enable();
     }
@@ -293,10 +382,18 @@ void handleConfigWifi(AsyncWebServerRequest *req)
         json["msg"] = "提交成功，已经将配置文件存入文件，即将开始连接WiFi";
         String s;
         serializeJsonPretty(json, s);
+        disConnectWifi();
         req->send(200, "application/json", s);
-        tWifiConnectTask.disable();
-        tWifiConnectTask.enable();
     }
+}
+void disConnectWifi()
+{
+    WiFi.disconnect();
+    tWifiConnectingAnimationTask.enable();
+    tWifiConnectTask.disable();
+    tWeatherDisplayTask.disable();
+    tWeatherUpdateTask.disable();
+    tWifiConnectTask.restart();
 }
 
 void handleRoot(AsyncWebServerRequest *req)
@@ -305,8 +402,8 @@ void handleRoot(AsyncWebServerRequest *req)
     String s;
     json["code"] = 0;
     json["msg"] = "Wellcome！";
-    json["routers"]["wifi"] = "/config/wifi";
-    json["routers"]["location"] = "/config/location";
+    json["routers"]["wifi"] = "/wifi";
+    json["routers"]["location"] = "/location";
 
     serializeJsonPretty(json, s);
     req->send(200, "application/json", s);
@@ -318,6 +415,7 @@ void initWifi()
 
     Serial.println("初始化WiFi");
     tft_Print_Bottom("Init WiFi...");
+    tWifiConnectingAnimationTask.enable();
     String ssid = readSSID();
     ssid.replace("\n", "");
     ssid.trim();
@@ -332,42 +430,26 @@ void initWifi()
     Serial.println(ssid + pwd);
 
     WiFi.disconnect();
-
+    yield();
     WiFi.begin(ssid, pwd);
-    tWifiConnectingAnimationTask.setIterations(-1);
-    tWifiConnectingAnimationTask.setInterval(1000);
-    tWifiConnectingAnimationTask.enable();
+
     yield();
     Serial.println("尝试连接WiFi");
     tWifiConnectTask.yield(&connectionCheck);
 }
-void onWiFiEventStationModeConnected(WiFiEventStationModeConnected s)
-{
-    Serial.println(s.ssid);
-}
-void onSoftAPModeStationConnected(WiFiEventSoftAPModeStationConnected s)
-{
-    String mac = "";
-    for (uint8_t i = 0; i < 6; i++)
-    {
-        mac += ":" + s.mac[i];
-    }
-
-    Serial.println(mac);
-}
-
 void connectionCheck()
 {
+
     if (WiFi.status() == WL_CONNECTED)
     {
 
         Serial.println("连接成功");
         tft_Print_Bottom(WiFi.SSID() + " Connected! IP:" + WiFi.localIP().toString());
-        tWifiConnectTask.delay(1000);
-        // TODO 增加开启WiFi强度显示，展示在顶部栏
-        tShowWifiSignalIntensityTask.disable();
+        // 停止WiFi动画 WiFi信号展示任务 SSID
+
         tWifiConnectingAnimationTask.disable();
-        tShowWifiSignalIntensityTask.enable();
+
+        tWeatherUpdateTask.enable();
         tft_Clear_Bottom();
         tWifiConnectTask.getStatusRequest()->signalComplete();
         tWifiConnectTask.disable();
@@ -375,21 +457,21 @@ void connectionCheck()
     else // 没有连接成功，重试
     {
 
-        if (tWifiConnectTask.getRunCounter() % 3 == 0) // 每3秒重试一次
+        if (tWifiConnectTask.getRunCounter() % 5 == 0) // 每5秒重试一次
         {
             Serial.println("重试中..");
             WiFi.begin(readSSID(), readPwd());
             yield();
         }
 
-        if (tWifiConnectTask.getRunCounter() == 60) // 当到了20秒后，不再重试
-        {
-            Serial.println("重试了20次了");
-            tft_Print_Bottom("Connect" + readSSID() + "Failed");
-            WiFi.disconnect(true);
-            tWifiConnectTask.getInternalStatusRequest()->signal(-1);
-            tWifiConnectTask.disable();
-        }
+        // if (tWifiConnectTask.getRunCounter() == 60) // 当到了20秒后，不再重试
+        // {
+        //     Serial.println("重试了20次了");
+        //     tft_Print_Bottom("Connect" + readSSID() + "Failed");
+        //     WiFi.disconnect(true);
+        //     tWifiConnectTask.getInternalStatusRequest()->signal(-1);
+        //     tWifiConnectTask.disable();
+        // }
     }
 }
 
@@ -421,7 +503,8 @@ void displayWeather()
     if (wa.code == "200")
     {
         tft.setCursor(0, 222);
-        tft.println("Temp:" + wa.tmp);
+        tft.print("Temp:" + wa.tmp);
+        tft.setCursor(0, 232);
         tft.print("Humi:" + wa.humidity);
     }
 }
@@ -461,7 +544,6 @@ void initWeather()
             wa.humidity = obj["now"]["humidity"].as<String>();
             wa.text = obj["now"]["text"].as<String>();
             Serial.println("获取到天气信息");
-            Serial.println(payload);
             tWeatherDisplayTask.disable();
             tWeatherDisplayTask.enable();
             tWeatherUpdateTask.getInternalStatusRequest()->signalComplete();
@@ -494,14 +576,6 @@ void writeLoc(String lon, String lat)
     f.close();
 }
 
-void displayWifiIntensity()
-{
-    int rssi = WiFi.RSSI();
-    scu *wifi = rssiToString(rssi);
-    showWifiIcon(wifi);
-    tShowWifiSignalIntensityTask.getInternalStatusRequest()->signalComplete();
-}
-
 scu *rssiToString(int8_t rssi)
 {
 
@@ -525,12 +599,38 @@ scu *rssiToString(int8_t rssi)
 }
 void showWifiIcon(const uint8_t *img)
 {
+    tft.fillRect(tft.width() - 18, 2, 16, 16, bgColor);
     tft.drawXBitmap(tft.width() - 18, 2, img, 16, 16, TFT_BLACK);
+}
+void showMsgToTop(String str)
+{
+    int width = tft.textWidth(str);
+    tft.setCursor(tft.width() - (20 + width), 8);
+    tft.print(str);
+    tShowWifiInfoToTopTask.getInternalStatusRequest()->signalComplete();
+}
+void showWifiInfoToTop()
+{
+
+    if (tWifiConnectTask.getInternalStatusRequest()->completed())
+    {
+        String ssid = readSSID();
+        int width = tft.textWidth("Connecting...");
+        tft.fillRect(tft.width() - (width + 20), 8, width, 8, bgColor);
+        showMsgToTop(ssid);
+        int rssi = WiFi.RSSI();
+        scu *wifi = rssiToString(rssi);
+        showWifiIcon(wifi);
+    }
+    else
+    {
+        showMsgToTop("Connecting...");
+    }
 }
 
 void wifiConnecting()
 {
-    tft.fillRect(tft.width() - 18, 2, 16, 16, tft.color565(245, 189, 188));
+    tft.fillRect(tft.width() - 18, 2, 16, 16, bgColor);
     if (tWifiConnectingAnimationTask.getRunCounter() % 4 == 1)
     {
         tft.drawXBitmap(tft.width() - 18, 2, WiFi_Low, 16, 16, TFT_BLACK);
