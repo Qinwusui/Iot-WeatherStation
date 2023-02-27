@@ -61,7 +61,7 @@ void showMsgToTop(String str);
 void tft_Clear_Top();
 void initWsClient();
 void wsClientEvent(WStype_t type, uint8_t *payload, size_t length);
-void wsPoll();
+void wsLoop();
 void time2Logo();
 void timeUp();
 // int ungzip(char *source, int len, char *des);

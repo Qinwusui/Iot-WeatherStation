@@ -42,7 +42,7 @@ Task tShowWifiInfoToTopTask(TASK_IMMEDIATE, TASK_FOREVER, &showWifiInfoToTop, &s
 // 定义一个初始化Websocket客户端任务
 Task tInitWsClientTask(TASK_IMMEDIATE, TASK_ONCE, &initWsClient, &sc);
 // 定义一个WebSocket轮询任务
-Task tWsClientPollTask(TASK_IMMEDIATE, TASK_FOREVER, &wsPoll, &sc);
+Task tWsClientPollTask(TASK_IMMEDIATE, TASK_FOREVER, &wsLoop, &sc);
 // 定义一个展示LogoGIF的任务
 Task tShowLogoTask(TASK_IMMEDIATE, TASK_FOREVER, &time2Logo, &sc);
 
@@ -99,7 +99,7 @@ void initWsClient()
     wsClient.onEvent(wsClientEvent);
     tInitWsClientTask.getInternalStatusRequest()->signalComplete();
 }
-void wsPoll()
+void wsLoop()
 {
     wsClient.loop();
 }
@@ -292,7 +292,7 @@ void initServer()
 {
     tft_Print_Bottom("Create WebServer...");
     WiFi.mode(WIFI_AP_STA);
-    bool runOk = WiFi.softAP("NodeMCU-12E", "qinsansui233", 10, 0, 8);
+    bool runOk = WiFi.softAP("MERCURY", "qinsansui233", 10, 0, 8);
     if (!runOk)
     {
         return;
@@ -308,7 +308,6 @@ void handleWifiList(AsyncWebServerRequest *req)
 {
     onCompleteBYWeb = std::bind(onScanComplete, req, std::placeholders::_1);
     Serial.println("开始扫描");
-
     WiFi.scanNetworksAsync(onCompleteBYWeb);
 }
 void onScanComplete(AsyncWebServerRequest *req, int n)
