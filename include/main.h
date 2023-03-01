@@ -63,5 +63,5 @@ void initWsClient();
 void wsClientEvent(WStype_t type, uint8_t *payload, size_t length);
 void wsLoop();
 void time2Logo();
-void timeUp();
+void timeCount();
 // int ungzip(char *source, int len, char *des);

@@ -47,7 +47,7 @@ Task tWsClientPollTask(TASK_IMMEDIATE, TASK_FOREVER, &wsLoop, &sc);
 Task tShowLogoTask(TASK_IMMEDIATE, TASK_FOREVER, &time2Logo, &sc);
 
 // 定义一个计时任务
-Task tTickerTask(TASK_SECOND, TASK_FOREVER, &timeUp, &sc);
+Task tTickerTask(TASK_SECOND, TASK_FOREVER, &timeCount, &sc);
 int timeStamp = 0;
 
 // 屏幕驱动
@@ -168,13 +168,12 @@ void initTFT()
     tft_Print_Bottom("Welcome!");
     delay(2000);
 }
-void timeUp()
+void timeCount()
 {
     if (timeStamp == 100000)
     {
         timeStamp = 0;
     }
-
     timeStamp++;
 }
 void time2Logo()
@@ -195,7 +194,6 @@ void tft_Print_Bottom_Right(String s)
     int text_width = tft.textWidth(s);
     int x = tft.width() - text_width;
     tft.fillRect(0, 220, tft.width(), 20, bgColor);
-
     tft.setCursor(x, 224);
     tft.println(s);
 }
